@@ -1,6 +1,6 @@
-# Mini-AEGIS Project Structure and Source Code
+# SecureFlow Project Structure and Source Code
 
-This document contains the complete folder structure and full source code of the **Mini-AEGIS** human-in-the-loop tool-call approval prototype.
+This document contains the complete folder structure and full source code of the **SecureFlow** human-in-the-loop tool-call approval prototype.
 
 ---
 
@@ -8,11 +8,14 @@ This document contains the complete folder structure and full source code of the
 
 ```text
 naveen-agent-gaurd/
+├── .gitignore
 ├── README.md
+├── ollama_agent.py
 ├── agent/
 │   ├── guard.py
 │   ├── main.py
-│   └── tools.py
+│   ├── tools.py
+│   └── secureflow_guard.py
 ├── gateway/
 │   ├── app.py
 │   ├── rules.json
@@ -26,9 +29,62 @@ naveen-agent-gaurd/
 
 ## 2. Source Code Files
 
+### [.gitignore](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/.gitignore)
+```text
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Virtualenv
+.venv/
+venv/
+
+# Sandbox directory containing transient agent files
+sandbox/
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+```
+
+---
+
 ### [README.md](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/README.md)
 ```markdown
-# Agent-Gaurd
+# SecureFlow
 
 A minimal prototype of the **agent firewall / human-in-the-loop approval** pattern.
 Two processes talk over HTTP; a human can intercept and approve or deny tool calls
@@ -164,6 +220,132 @@ mini-aegis/
 This is a learning prototype. It intentionally omits:
 authentication, a real database, a UI dashboard, ML/anomaly detection,
 retry queues, HTTPS, and anything else that belongs in a production tool.
+```
+
+---
+
+### [ollama_agent.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/ollama_agent.py)
+```python
+import ollama
+import json
+from agent.secureflow_guard import secureflow_guard  # your guard.py function
+
+# Define tools for Ollama
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file from the sandbox",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File to read"}
+                },
+                "required": ["filename"]
+            }
+        }
+    },
+    {
+        "type": "function", 
+        "function": {
+            "name": "delete_file",
+            "description": "Delete a file from the sandbox",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File to delete"}
+                },
+                "required": ["filename"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file in the sandbox",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string"},
+                    "content":  {"type": "string"}
+                },
+                "required": ["filename", "content"]
+            }
+        }
+    },
+]
+
+# Map tool names to actual functions
+def execute_tool(name: str, args: dict) -> str:
+    from pathlib import Path
+    sandbox = Path("sandbox")
+    sandbox.mkdir(exist_ok=True)
+
+    if name == "read_file":
+        p = sandbox / args["filename"]
+        return p.read_text() if p.exists() else "File not found"
+
+    if name == "write_file":
+        p = sandbox / args["filename"]
+        p.write_text(args["content"])
+        return f"Written to {args['filename']}"
+
+    if name == "delete_file":
+        p = sandbox / args["filename"]
+        if p.exists():
+            p.unlink()
+            return f"Deleted {args['filename']}"
+        return "File not found"
+
+    return f"Unknown tool: {name}"
+
+
+def run_agent(user_input: str):
+    messages = [{"role": "user", "content": user_input}]
+
+    while True:
+        response = ollama.chat(
+            model="qwen2.5:1.5b",   # or qwen2.5, mistral-nemo — any tool-capable model
+            messages=messages,
+            tools=tools,
+        )
+
+        msg = response["message"]
+        messages.append(msg)
+
+        # No tool calls → final answer
+        if not msg.get("tool_calls"):
+            print(f"\n[Agent] {msg['content']}")
+            break
+
+        # Process each tool call through SecureFlow first
+        for call in msg["tool_calls"]:
+            name = call["function"]["name"]
+            args = call["function"]["arguments"]
+            if isinstance(args, str):
+                args = json.loads(args)
+
+            print(f"\n[Agent] wants to call: {name}({args})")
+
+            # ← SecureFlow gate — blocks here if pending
+            try:
+                secureflow_guard(name, args)
+                result = execute_tool(name, args)
+                print(f"[Agent] result: {result}")
+            except PermissionError as e:
+                result = f"BLOCKED by SecureFlow: {e}"
+                print(f"[Agent] {result}")
+
+            messages.append({
+                "role": "tool",
+                "content": result,
+            })
+
+
+if __name__ == "__main__":
+    run_agent("Delete notes.txt and then read config.txt")
 ```
 
 ---
@@ -364,321 +546,444 @@ if __name__ == "__main__":
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mini-AEGIS Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg-color: #0f172a;
-            --glass-bg: rgba(30, 41, 59, 0.7);
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --text-primary: #f8fafc;
-            --text-secondary: #94a3b8;
-            --accent-green: #10b981;
-            --accent-green-hover: #059669;
-            --accent-red: #ef4444;
-            --accent-red-hover: #dc2626;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-color);
-            background-image: 
-                radial-gradient(at 0% 0%, rgba(37, 99, 235, 0.15) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
-            background-attachment: fixed;
-            color: var(--text-primary);
-            margin: 0;
-            padding: 2rem;
-            min-height: 100vh;
-        }
+<title>AEGIS Approval Center</title>
 
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-        .header {
-            text-align: center;
-            margin-bottom: 3rem;
-        }
+<style>
+:root{
+    --bg:#f5f7fa;
+    --card:#ffffff;
+    --border:#e5e7eb;
 
-        .header h1 {
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-            background: linear-gradient(135deg, #60a5fa, #a78bfa);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
+    --text:#111827;
+    --muted:#6b7280;
 
-        .header p {
-            color: var(--text-secondary);
-            font-size: 1.1rem;
-        }
+    --success:#16a34a;
+    --success-hover:#15803d;
 
-        .empty-state {
-            text-align: center;
-            padding: 4rem 2rem;
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: 1rem;
-            backdrop-filter: blur(10px);
-            color: var(--text-secondary);
-            transition: all 0.3s ease;
-        }
+    --danger:#dc2626;
+    --danger-hover:#b91c1c;
 
-        .requests-list {
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-        }
+    --warning-bg:#fef3c7;
+    --warning-text:#92400e;
 
-        .request-card {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            animation: slideIn 0.4s ease-out forwards;
-        }
+    --shadow:
+        0 1px 3px rgba(0,0,0,.05),
+        0 8px 24px rgba(0,0,0,.04);
+}
 
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
 
-        .request-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        }
+body{
+    font-family:'Inter',sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    min-height:100vh;
+    padding:40px 24px;
+}
 
-        .request-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 1rem;
-        }
+.container{
+    max-width:1000px;
+    margin:auto;
+}
 
-        .tool-name {
-            font-size: 1.25rem;
-            font-weight: 600;
-            color: #e2e8f0;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
+/* HEADER */
 
-        .badge {
-            font-size: 0.75rem;
-            padding: 0.25rem 0.75rem;
-            border-radius: 9999px;
-            background: rgba(245, 158, 11, 0.2);
-            color: #fcd34d;
-            border: 1px solid rgba(245, 158, 11, 0.3);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 600;
-        }
+.header{
+    margin-bottom:40px;
+}
 
-        .arguments-box {
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 0.5rem;
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            font-family: monospace;
-            font-size: 0.9rem;
-            color: #cbd5e1;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-        }
+.header h1{
+    font-size:2.2rem;
+    font-weight:800;
+    color:var(--text);
+    margin-bottom:8px;
+}
 
-        .actions {
-            display: flex;
-            gap: 1rem;
-        }
+.header p{
+    color:var(--muted);
+    font-size:1rem;
+}
 
-        .btn {
-            flex: 1;
-            padding: 0.75rem 1.5rem;
-            border-radius: 0.5rem;
-            font-weight: 600;
-            font-size: 1rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 0.5rem;
-        }
+/* EMPTY STATE */
 
-        .btn-allow {
-            background-color: var(--accent-green);
-            color: white;
-            box-shadow: 0 0 15px rgba(16, 185, 129, 0.2);
-        }
+.empty-state{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:18px;
+    padding:60px 40px;
+    text-align:center;
+    box-shadow:var(--shadow);
+}
 
-        .btn-allow:hover {
-            background-color: var(--accent-green-hover);
-            transform: translateY(-1px);
-            box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
-        }
+.empty-state svg{
+    color:var(--success);
+    margin-bottom:20px;
+}
 
-        .btn-block {
-            background-color: transparent;
-            color: var(--accent-red);
-            border: 1px solid var(--accent-red);
-        }
+.empty-state h3{
+    font-size:1.2rem;
+    margin-bottom:8px;
+}
 
-        .btn-block:hover {
-            background-color: rgba(239, 68, 68, 0.1);
-        }
-        
-        .timestamp {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-        }
-    </style>
+.empty-state p{
+    color:var(--muted);
+}
+
+/* LIST */
+
+.requests-list{
+    display:flex;
+    flex-direction:column;
+    gap:20px;
+}
+
+/* CARD */
+
+.request-card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:18px;
+    padding:24px;
+    box-shadow:var(--shadow);
+    transition:.2s ease;
+}
+
+.request-card:hover{
+    transform:translateY(-2px);
+}
+
+.request-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:18px;
+}
+
+.tool-name{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:1.15rem;
+    font-weight:700;
+}
+
+.tool-name svg{
+    color:#374151;
+}
+
+/* BADGE */
+
+.badge{
+    padding:8px 14px;
+    border-radius:999px;
+    background:var(--warning-bg);
+    color:var(--warning-text);
+    font-size:.75rem;
+    font-weight:700;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+}
+
+/* ARGUMENT BOX */
+
+.arguments-title{
+    font-size:.9rem;
+    font-weight:600;
+    color:var(--muted);
+    margin-bottom:10px;
+}
+
+.arguments-box{
+    background:#f9fafb;
+    border:1px solid #e5e7eb;
+    border-radius:12px;
+    padding:16px;
+    font-family:monospace;
+    font-size:.9rem;
+    overflow-x:auto;
+    white-space:pre-wrap;
+    color:#374151;
+    margin-bottom:18px;
+}
+
+.timestamp{
+    font-size:.85rem;
+    color:var(--muted);
+    margin-bottom:20px;
+}
+
+/* ACTIONS */
+
+.actions{
+    display:flex;
+    gap:12px;
+}
+
+.btn{
+    flex:1;
+    height:48px;
+    border-radius:12px;
+    cursor:pointer;
+    font-size:.95rem;
+    font-weight:600;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:8px;
+    transition:.2s ease;
+}
+
+/* REJECT */
+
+.btn-block{
+    background:white;
+    color:var(--danger);
+    border:1px solid var(--danger);
+}
+
+.btn-block:hover{
+    background:#fef2f2;
+}
+
+/* APPROVE */
+
+.btn-allow{
+    background:var(--success);
+    color:white;
+    border:none;
+}
+
+.btn-allow:hover{
+    background:var(--success-hover);
+}
+
+@media(max-width:700px){
+
+    .request-header{
+        flex-direction:column;
+        align-items:flex-start;
+        gap:12px;
+    }
+
+    .actions{
+        flex-direction:column;
+    }
+}
+</style>
 </head>
-<body>
-    <div class="container">
-        <header class="header">
-            <h1>Mini-AEGIS</h1>
-            <p>Approval Dashboard</p>
-        </header>
 
-        <div id="requests-container" class="requests-list">
-            <!-- Content populated by JS -->
-            <div class="empty-state">
-                <p>Loading pending requests...</p>
-            </div>
+<body>
+
+<div class="container">
+
+    <header class="header">
+        <h1>AEGIS Approval Center</h1>
+        <p>Human-in-the-loop security approvals</p>
+    </header>
+
+    <div id="requests-container" class="requests-list">
+
+        <div class="empty-state">
+            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+
+            <h3>No Pending Requests</h3>
+            <p>All agent actions have been reviewed.</p>
         </div>
+
     </div>
 
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <script>
-        const container = document.getElementById('requests-container');
-        let currentChecks = new Map(); // Store current state to avoid unnecessary re-renders
+</div>
 
-        function renderChecks(checks) {
-            // Prevent blinking by checking if the data actually changed
-            const newKeys = checks.map(c => c.check_id).join(',');
-            const oldKeys = Array.from(currentChecks.keys()).join(',');
-            
-            if (newKeys === oldKeys && checks.length === currentChecks.size) {
-                return; // Data hasn't changed, skip re-rendering
-            }
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
-            if (checks.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 1rem; opacity: 0.5;">
-                            <path d="M22 11.08V12a10 10 10 0 1 1-5.93-9.14"></path>
-                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                        </svg>
-                        <p>No pending requests right now.</p>
-                        <p style="font-size: 0.9rem; margin-top: 0.5rem;">Agent is running smoothly.</p>
-                    </div>
-                `;
-                currentChecks.clear();
-                return;
-            }
+<script>
+const container = document.getElementById('requests-container');
+let currentChecks = new Map();
 
-            currentChecks.clear();
-            checks.forEach(c => currentChecks.set(c.check_id, c));
+function renderChecks(checks){
 
-            let html = '';
-            checks.forEach(check => {
-                const timeStr = new Date(check.timestamp).toLocaleTimeString();
-                const argsStr = JSON.stringify(check.arguments, null, 2);
-                
-                html += `
-                    <div class="request-card" id="check-${check.check_id}">
-                        <div class="request-header">
-                            <div class="tool-name">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
-                                </svg>
-                                ${check.tool}
-                            </div>
-                            <span class="badge">PENDING</span>
-                        </div>
-                        
-                        <div class="arguments-box">${argsStr}</div>
-                        
-                        <div class="request-header" style="margin-bottom: 1.5rem;">
-                            <span class="timestamp">Requested at ${timeStr} • ID: ${check.check_id}</span>
-                        </div>
+    const newKeys = checks.map(c => c.check_id).join(',');
+    const oldKeys = Array.from(currentChecks.keys()).join(',');
 
-                        <div class="actions">
-                            <button class="btn btn-block" onclick="decide('${check.check_id}', 'block')">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                                Reject
-                            </button>
-                            <button class="btn btn-allow" onclick="decide('${check.check_id}', 'allow')">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                Allow Action
-                            </button>
-                        </div>
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-        }
+    if(newKeys === oldKeys && checks.length === currentChecks.size){
+        return;
+    }
 
-        async function fetchPending() {
-            try {
-                const response = await fetch('/pending');
-                const checks = await response.json();
-                renderChecks(checks);
-            } catch (error) {
-                console.error("Failed to fetch pending requests:", error);
-            }
-        }
+    if(checks.length === 0){
 
-        async function decide(checkId, decision) {
-            // Optimistic UI update
-            const card = document.getElementById(`check-${checkId}`);
-            if (card) {
-                card.style.opacity = '0.5';
-                card.style.pointerEvents = 'none';
-            }
+        container.innerHTML = `
+        <div class="empty-state">
+            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
 
-            try {
-                await fetch(`/decide/${checkId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        decision: decision,
-                        reason: decision === 'block' ? 'Rejected via Dashboard UI' : ''
-                    })
-                });
-                // Fetch immediately to update UI
-                fetchPending();
-            } catch (error) {
-                console.error("Failed to submit decision:", error);
-                if (card) {
-                    card.style.opacity = '1';
-                    card.style.pointerEvents = 'auto';
-                }
-                alert("Failed to submit decision. Check console.");
-            }
-        }
+            <h3>No Pending Requests</h3>
+            <p>All agent actions have been reviewed.</p>
+        </div>
+        `;
 
-        // Initial fetch
+        currentChecks.clear();
+        return;
+    }
+
+    currentChecks.clear();
+
+    checks.forEach(c=>{
+        currentChecks.set(c.check_id,c);
+    });
+
+    let html = '';
+
+    checks.forEach(check=>{
+
+        const timeStr =
+            new Date(check.timestamp)
+            .toLocaleTimeString();
+
+        const argsStr =
+            JSON.stringify(
+                check.arguments,
+                null,
+                2
+            );
+
+        html += `
+        <div class="request-card" id="check-${check.check_id}">
+
+            <div class="request-header">
+
+                <div class="tool-name">
+
+                    <svg width="20" height="20" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                    </svg>
+
+                    ${check.tool}
+
+                </div>
+
+                <span class="badge">Pending</span>
+
+            </div>
+
+            <div class="arguments-title">
+                Request Arguments
+            </div>
+
+            <div class="arguments-box">
+${argsStr}
+            </div>
+
+            <div class="timestamp">
+                Requested at ${timeStr} • ID: ${check.check_id}
+            </div>
+
+            <div class="actions">
+
+                <button class="btn btn-block"
+                    onclick="decide('${check.check_id}','block')">
+
+                    Reject
+
+                </button>
+
+                <button class="btn btn-allow"
+                    onclick="decide('${check.check_id}','allow')">
+
+                    Approve
+
+                </button>
+
+            </div>
+
+        </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+async function fetchPending(){
+
+    try{
+
+        const response =
+            await fetch('/pending');
+
+        const checks =
+            await response.json();
+
+        renderChecks(checks);
+
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+async function decide(checkId, decision){
+
+    const card =
+        document.getElementById(
+            `check-${checkId}`
+        );
+
+    if(card){
+
+        card.style.opacity = '.5';
+        card.style.pointerEvents = 'none';
+
+    }
+
+    try{
+
+        await fetch(`/decide/${checkId}`,{
+
+            method:'POST',
+
+            headers:{
+                'Content-Type':'application/json'
+            },
+
+            body:JSON.stringify({
+                decision
+            })
+
+        });
+
         fetchPending();
 
-        // Connect to Socket.IO for real-time updates
-        const socket = io();
-        socket.on('checks_updated', (checks) => {
-            renderChecks(checks);
-        });
-    </script>
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+fetchPending();
+
+const socket = io();
+
+socket.on('checks_updated',(checks)=>{
+    renderChecks(checks);
+});
+</script>
+
 </body>
 </html>
 ```
@@ -934,4 +1239,28 @@ def delete_file(filename: str) -> str:
     path.unlink()
     print(f"[Agent] delete_file OK: {filename} deleted.")
     return f"Deleted {filename}."
+```
+
+---
+
+### [agent/secureflow_guard.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/secureflow_guard.py)
+```python
+import sys
+from pathlib import Path
+
+# Add agent directory to sys.path to resolve imports correctly
+agent_dir = Path(__file__).parent
+if str(agent_dir) not in sys.path:
+    sys.path.append(str(agent_dir))
+
+from guard import require_approval, Allowed, Blocked
+
+def secureflow_guard(tool_name: str, arguments: dict):
+    """
+    Wrapper for secureflow / mini-aegis guard.
+    Raises PermissionError if the action is blocked by the gateway.
+    """
+    result = require_approval(tool_name, arguments)
+    if isinstance(result, Blocked):
+        raise PermissionError(result.reason)
 ```
