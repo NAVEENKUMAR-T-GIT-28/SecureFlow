@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>AEGIS Approval Center</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+:root{
+    --bg:#f5f7fa;
+    --card:#ffffff;
+    --border:#e5e7eb;
+
+    --text:#111827;
+    --muted:#6b7280;
+
+    --success:#16a34a;
+    --success-hover:#15803d;
+
+    --danger:#dc2626;
+    --danger-hover:#b91c1c;
+
+    --warning-bg:#fef3c7;
+    --warning-text:#92400e;
+
+    --shadow:
+        0 1px 3px rgba(0,0,0,.05),
+        0 8px 24px rgba(0,0,0,.04);
+}
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+    font-family:'Inter',sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    min-height:100vh;
+    padding:40px 24px;
+}
+
+.container{
+    max-width:1000px;
+    margin:auto;
+}
+
+/* HEADER */
+
+.header{
+    margin-bottom:40px;
+}
+
+.header h1{
+    font-size:2.2rem;
+    font-weight:800;
+    color:var(--text);
+    margin-bottom:8px;
+}
+
+.header p{
+    color:var(--muted);
+    font-size:1rem;
+}
+
+/* EMPTY STATE */
+
+.empty-state{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:18px;
+    padding:60px 40px;
+    text-align:center;
+    box-shadow:var(--shadow);
+}
+
+.empty-state svg{
+    color:var(--success);
+    margin-bottom:20px;
+}
+
+.empty-state h3{
+    font-size:1.2rem;
+    margin-bottom:8px;
+}
+
+.empty-state p{
+    color:var(--muted);
+}
+
+/* LIST */
+
+.requests-list{
+    display:flex;
+    flex-direction:column;
+    gap:20px;
+}
+
+/* CARD */
+
+.request-card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:18px;
+    padding:24px;
+    box-shadow:var(--shadow);
+    transition:.2s ease;
+}
+
+.request-card:hover{
+    transform:translateY(-2px);
+}
+
+.request-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:18px;
+}
+
+.tool-name{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:1.15rem;
+    font-weight:700;
+}
+
+.tool-name svg{
+    color:#374151;
+}
+
+/* BADGE */
+
+.badge{
+    padding:8px 14px;
+    border-radius:999px;
+    background:var(--warning-bg);
+    color:var(--warning-text);
+    font-size:.75rem;
+    font-weight:700;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+}
+
+/* ARGUMENT BOX */
+
+.arguments-title{
+    font-size:.9rem;
+    font-weight:600;
+    color:var(--muted);
+    margin-bottom:10px;
+}
+
+.arguments-box{
+    background:#f9fafb;
+    border:1px solid #e5e7eb;
+    border-radius:12px;
+    padding:16px;
+    font-family:monospace;
+    font-size:.9rem;
+    overflow-x:auto;
+    white-space:pre-wrap;
+    color:#374151;
+    margin-bottom:18px;
+}
+
+.timestamp{
+    font-size:.85rem;
+    color:var(--muted);
+    margin-bottom:20px;
+}
+
+/* ACTIONS */
+
+.actions{
+    display:flex;
+    gap:12px;
+}
+
+.btn{
+    flex:1;
+    height:48px;
+    border-radius:12px;
+    cursor:pointer;
+    font-size:.95rem;
+    font-weight:600;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:8px;
+    transition:.2s ease;
+}
+
+/* REJECT */
+
+.btn-block{
+    background:white;
+    color:var(--danger);
+    border:1px solid var(--danger);
+}
+
+.btn-block:hover{
+    background:#fef2f2;
+}
+
+/* APPROVE */
+
+.btn-allow{
+    background:var(--success);
+    color:white;
+    border:none;
+}
+
+.btn-allow:hover{
+    background:var(--success-hover);
+}
+
+@media(max-width:700px){
+
+    .request-header{
+        flex-direction:column;
+        align-items:flex-start;
+        gap:12px;
+    }
+
+    .actions{
+        flex-direction:column;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <header class="header">
+        <h1>AEGIS Approval Center</h1>
+        <p>Human-in-the-loop security approvals</p>
+    </header>
+
+    <div id="requests-container" class="requests-list">
+
+        <div class="empty-state">
+            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+
+            <h3>No Pending Requests</h3>
+            <p>All agent actions have been reviewed.</p>
+        </div>
+
+    </div>
+
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<script>
+const container = document.getElementById('requests-container');
+let currentChecks = new Map();
+
+function renderChecks(checks){
+
+    const newKeys = checks.map(c => c.check_id).join(',');
+    const oldKeys = Array.from(currentChecks.keys()).join(',');
+
+    if(newKeys === oldKeys && checks.length === currentChecks.size){
+        return;
+    }
+
+    if(checks.length === 0){
+
+        container.innerHTML = `
+        <div class="empty-state">
+            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+
+            <h3>No Pending Requests</h3>
+            <p>All agent actions have been reviewed.</p>
+        </div>
+        `;
+
+        currentChecks.clear();
+        return;
+    }
+
+    currentChecks.clear();
+
+    checks.forEach(c=>{
+        currentChecks.set(c.check_id,c);
+    });
+
+    let html = '';
+
+    checks.forEach(check=>{
+
+        const timeStr =
+            new Date(check.timestamp)
+            .toLocaleTimeString();
+
+        const argsStr =
+            JSON.stringify(
+                check.arguments,
+                null,
+                2
+            );
+
+        html += `
+        <div class="request-card" id="check-${check.check_id}">
+
+            <div class="request-header">
+
+                <div class="tool-name">
+
+                    <svg width="20" height="20" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                    </svg>
+
+                    ${check.tool}
+
+                </div>
+
+                <span class="badge">Pending</span>
+
+            </div>
+
+            <div class="arguments-title">
+                Request Arguments
+            </div>
+
+            <div class="arguments-box">
+${argsStr}
+            </div>
+
+            <div class="timestamp">
+                Requested at ${timeStr} • ID: ${check.check_id}
+            </div>
+
+            <div class="actions">
+
+                <button class="btn btn-block"
+                    onclick="decide('${check.check_id}','block')">
+
+                    Reject
+
+                </button>
+
+                <button class="btn btn-allow"
+                    onclick="decide('${check.check_id}','allow')">
+
+                    Approve
+
+                </button>
+
+            </div>
+
+        </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+async function fetchPending(){
+
+    try{
+
+        const response =
+            await fetch('/pending');
+
+        const checks =
+            await response.json();
+
+        renderChecks(checks);
+
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+async function decide(checkId, decision){
+
+    const card =
+        document.getElementById(
+            `check-${checkId}`
+        );
+
+    if(card){
+
+        card.style.opacity = '.5';
+        card.style.pointerEvents = 'none';
+
+    }
+
+    try{
+
+        await fetch(`/decide/${checkId}`,{
+
+            method:'POST',
+
+            headers:{
+                'Content-Type':'application/json'
+            },
+
+            body:JSON.stringify({
+                decision
+            })
+
+        });
+
+        fetchPending();
+
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+fetchPending();
+
+const socket = io();
+
+socket.on('checks_updated',(checks)=>{
+    renderChecks(checks);
+});
+</script>
+
+</body>
+</html>

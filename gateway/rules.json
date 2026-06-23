@@ -1,0 +1,8 @@
+{
+  "rules": [
+    { "tool": "read_file",   "decision": "allow" },
+    { "tool": "write_file",  "decision": "allow" },
+    { "tool": "delete_file", "decision": "pending" }
+  ],
+  "default_decision": "allow"
+}
