@@ -102,17 +102,18 @@ Edit `gateway/rules.json` and restart the Gateway.
 ## File layout
 
 ```
-mini-aegis/
-├── gateway/
-│   ├── app.py        # Flask server — /check, /check/{id}, /decide/{id}, /log
-│   └── rules.json    # One rule per tool: allow | block | pending
+Agent-gaurd/
+├── firewall/
+│   ├── app.py                # Flask server — /check, /check/{id}, /decide/{id}, /log
+│   ├── rules.json            # One rule per tool: allow | block | pending
+│   └── secureflow_guard.py   # Interceptor client that polls for approval
 │
 ├── agent/
-│   ├── main.py       # CLI loop
-│   ├── guard.py      # require_approval() — the polling client
-│   └── tools.py      # read_file / write_file / delete_file
+│   ├── ollama_agent.py       # Conversational LLM chat loop
+│   ├── tool_registry.py      # Executes tools
+│   ├── tools.json            # Tool schemas loaded by the LLM
+│   └── sandbox/              # The only folder tools are allowed to touch
 │
-├── sandbox/          # The only folder tools are allowed to touch
 └── README.md
 ```
 

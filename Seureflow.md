@@ -10,26 +10,31 @@ This document contains the complete folder structure and full source code of the
 naveen-agent-gaurd/
 ├── .gitignore
 ├── README.md
-├── ollama_agent.py
 ├── agent/
-│   ├── guard.py
-│   ├── main.py
-│   ├── tools.py
-│   └── secureflow_guard.py
-├── gateway/
+│   ├── ollama_agent.py
+│   ├── tools.json
+│   ├── tool_registry.py
+│   └── sandbox/
+│       ├── cli.py
+│       └── config.txt
+├── firewall/
 │   ├── app.py
+│   ├── guard.py
+│   ├── secureflow_guard.py
 │   ├── rules.json
 │   └── templates/
 │       └── index.html
-└── sandbox/
-    └── notes.txt (created during run)
+└── docs/
+    ├── api.md
+    ├── architecture.md
+    └── security-model.md
 ```
 
 ---
 
 ## 2. Source Code Files
 
-### [.gitignore](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/.gitignore)
+### [.gitignore](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/.gitignore)
 ```text
 # Python files
 __pycache__/
@@ -82,7 +87,7 @@ sandbox/
 
 ---
 
-### [README.md](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/README.md)
+### [README.md](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/README.md)
 ```markdown
 # SecureFlow
 
@@ -224,90 +229,55 @@ retry queues, HTTPS, and anything else that belongs in a production tool.
 
 ---
 
-### [ollama_agent.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/ollama_agent.py)
+### [agent/ollama_agent.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/ollama_agent.py)
 ```python
 import ollama
 import json
-from agent.secureflow_guard import secureflow_guard  # your guard.py function
+import sys
+from pathlib import Path
 
-# Define tools for Ollama
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read a file from the sandbox",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {"type": "string", "description": "File to read"}
-                },
-                "required": ["filename"]
+# Add project root to sys.path so the IDE linter and Python both resolve paths correctly
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from firewall.secureflow_guard import secureflow_guard
+from agent.tool_registry import execute, REGISTRY
+
+TOOLS_PATH = Path(__file__).parent / "tools.json"
+
+# ── load tool schemas from tools.json ────────────────────────────────────────
+def load_tools() -> list:
+    data = json.loads(TOOLS_PATH.read_text())
+    schemas = []
+    for t in data["tools"]:
+        schemas.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": t["parameters"],
+                    "required": t.get("required", [])
+                }
             }
-        }
-    },
-    {
-        "type": "function", 
-        "function": {
-            "name": "delete_file",
-            "description": "Delete a file from the sandbox",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {"type": "string", "description": "File to delete"}
-                },
-                "required": ["filename"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write content to a file in the sandbox",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filename": {"type": "string"},
-                    "content":  {"type": "string"}
-                },
-                "required": ["filename", "content"]
-            }
-        }
-    },
-]
+        })
+    return schemas
 
-# Map tool names to actual functions
-def execute_tool(name: str, args: dict) -> str:
-    from pathlib import Path
-    sandbox = Path("sandbox")
-    sandbox.mkdir(exist_ok=True)
+# ── build system prompt dynamically from registry ────────────────────────────
+def build_system_prompt() -> str:
+    tool_names = ", ".join(REGISTRY.keys())
+    return f"""You are a helpful assistant with access to a sandbox file system.
+You have these tools available: {tool_names}.
+Use them only when the user asks for something file-related.
+For normal conversation or questions unrelated to files, reply directly without using any tools.
+When you use a tool, briefly explain what you did and what you found."""
 
-    if name == "read_file":
-        p = sandbox / args["filename"]
-        return p.read_text() if p.exists() else "File not found"
-
-    if name == "write_file":
-        p = sandbox / args["filename"]
-        p.write_text(args["content"])
-        return f"Written to {args['filename']}"
-
-    if name == "delete_file":
-        p = sandbox / args["filename"]
-        if p.exists():
-            p.unlink()
-            return f"Deleted {args['filename']}"
-        return "File not found"
-
-    return f"Unknown tool: {name}"
-
-
-def run_agent(user_input: str):
-    messages = [{"role": "user", "content": user_input}]
-
+# ── single turn: handles all tool calls until LLM gives a text answer ────────
+def chat_turn(messages: list, tools: list) -> str:
     while True:
         response = ollama.chat(
-            model="qwen2.5:1.5b",   # or qwen2.5, mistral-nemo — any tool-capable model
+            model="qwen2.5:1.5b",
             messages=messages,
             tools=tools,
         )
@@ -315,56 +285,251 @@ def run_agent(user_input: str):
         msg = response["message"]
         messages.append(msg)
 
-        # No tool calls → final answer
         if not msg.get("tool_calls"):
-            print(f"\n[Agent] {msg['content']}")
-            break
+            return msg["content"]
 
-        # Process each tool call through SecureFlow first
         for call in msg["tool_calls"]:
             name = call["function"]["name"]
             args = call["function"]["arguments"]
             if isinstance(args, str):
                 args = json.loads(args)
 
-            print(f"\n[Agent] wants to call: {name}({args})")
+            print(f"\n  🔧 Tool selected: {name}({args})")
 
-            # ← SecureFlow gate — blocks here if pending
             try:
                 secureflow_guard(name, args)
-                result = execute_tool(name, args)
-                print(f"[Agent] result: {result}")
+                result = execute(name, args)       # ← dynamic, no if/else
+                print(f"  ✓  {result}")
             except PermissionError as e:
-                result = f"BLOCKED by SecureFlow: {e}"
-                print(f"[Agent] {result}")
+                result = f"Action blocked by SecureFlow: {e}"
+                print(f"  ✗  {result}")
 
             messages.append({
                 "role": "tool",
                 "content": result,
+                "name": name,
             })
 
+# ── main chat loop ────────────────────────────────────────────────────────────
+def main():
+    tools = load_tools()       # loaded fresh at startup from tools.json
+
+    print("╔══════════════════════════════════════════════╗")
+    print("║   SecureFlow Chat  (type 'exit' to quit)     ║")
+    print(f"║   Tools loaded: {len(tools)} from tools.json            ║")
+    print("╚══════════════════════════════════════════════╝\n")
+
+    messages = [{"role": "system", "content": build_system_prompt()}]
+
+    while True:
+        try:
+            user_input = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye!")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "bye"):
+            print("Assistant: Goodbye!")
+            break
+
+        messages.append({"role": "user", "content": user_input})
+        answer = chat_turn(messages, tools)
+        print(f"\nAssistant: {answer}")
 
 if __name__ == "__main__":
-    run_agent("Delete notes.txt and then read config.txt")
+    main()
 ```
 
 ---
 
-### [gateway/rules.json](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/gateway/rules.json)
+### [agent/tools.json](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/tools.json)
 ```json
 {
-  "rules": [
-    { "tool": "read_file",   "decision": "allow" },
-    { "tool": "write_file",  "decision": "allow" },
-    { "tool": "delete_file", "decision": "pending" }
-  ],
-  "default_decision": "allow"
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read the contents of a file from the sandbox",
+      "parameters": {
+        "filename": {"type": "string", "description": "Name of the file to read"}
+      },
+      "required": ["filename"]
+    },
+    {
+      "name": "write_file",
+      "description": "Write or create a file in the sandbox with given content",
+      "parameters": {
+        "filename": {"type": "string"},
+        "content":  {"type": "string", "description": "Content to write"}
+      },
+      "required": ["filename", "content"]
+    },
+    {
+      "name": "delete_file",
+      "description": "Permanently delete a file from the sandbox",
+      "parameters": {
+        "filename": {"type": "string", "description": "Name of the file to delete"}
+      },
+      "required": ["filename"]
+    },
+    {
+      "name": "list_files",
+      "description": "List all files currently in the sandbox",
+      "parameters": {},
+      "required": []
+    }
+  ]
 }
 ```
 
 ---
 
-### [gateway/app.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/gateway/app.py)
+### [agent/tool_registry.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/tool_registry.py)
+```python
+from pathlib import Path
+
+SANDBOX = Path(__file__).parent.parent / "sandbox"
+SANDBOX.mkdir(exist_ok=True)
+
+# Each function name must match the "name" field in tools.json exactly
+def read_file(filename: str, **_) -> str:
+    p = SANDBOX / filename
+    return p.read_text(encoding="utf-8") if p.exists() else f"[ERROR] File not found: {filename}"
+
+def write_file(filename: str, content: str, **_) -> str:
+    p = SANDBOX / filename
+    p.write_text(content, encoding="utf-8")
+    return f"Written {len(content)} bytes to {filename}"
+
+def delete_file(filename: str, **_) -> str:
+    p = SANDBOX / filename
+    if p.exists():
+        p.unlink()
+        return f"Successfully deleted {filename}"
+    return f"[ERROR] File not found: {filename}"
+
+def list_files(**_) -> str:
+    files = list(SANDBOX.iterdir())
+    if not files:
+        return "Sandbox is empty — no files."
+    return "Files in sandbox:\n" + "\n".join(f"  • {f.name}" for f in files)
+
+# Registry maps name → function
+REGISTRY = {
+    "read_file":   read_file,
+    "write_file":  write_file,
+    "delete_file": delete_file,
+    "list_files":  list_files,
+}
+
+def execute(name: str, args: dict) -> str:
+    fn = REGISTRY.get(name)
+    if fn is None:
+        return f"[ERROR] Unknown tool: {name}"
+    return fn(**args)
+```
+
+---
+
+### [agent/sandbox/cli.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/sandbox/cli.py)
+```python
+"""
+Mini-AEGIS Agent — Process A
+
+A simple REPL that understands these commands:
+
+  read   <filename>
+  write  <filename> <content ...>
+  delete <filename>
+  help
+  quit  (or exit, q)
+
+Run this in one terminal after starting the Gateway in another:
+  python gateway/app.py    ← Terminal 1
+  python agent/main.py     ← Terminal 2
+"""
+
+import sys
+from agent.tools import read_file, write_file, delete_file
+
+HELP = """
+Commands:
+  read   <filename>              — read a file from sandbox/
+  write  <filename> <content>    — write content to sandbox/<filename>
+  delete <filename>              — delete sandbox/<filename>  (requires approval)
+  help                           — show this message
+  quit / exit / q                — exit
+"""
+
+def run():
+    print("Mini-AEGIS Agent ready. Type 'help' for commands.")
+    while True:
+        try:
+            line = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[Agent] Bye.")
+            sys.exit(0)
+
+        if not line:
+            continue
+
+        parts = line.split(maxsplit=2)
+        cmd = parts[0].lower()
+
+        if cmd in ("quit", "exit", "q"):
+            print("[Agent] Bye.")
+            sys.exit(0)
+
+        elif cmd == "help":
+            print(HELP)
+
+        elif cmd == "read":
+            if len(parts) < 2:
+                print("[Agent] Usage: read <filename>")
+                continue
+            filename = parts[1]
+            print(f"[Agent] Checking with gateway...")
+            output = read_file(filename)
+            print(output)
+
+        elif cmd == "write":
+            if len(parts) < 3:
+                print("[Agent] Usage: write <filename> <content>")
+                continue
+            filename = parts[1]
+            content = parts[2]
+            print(f"[Agent] Checking with gateway...")
+            output = write_file(filename, content)
+            print(output)
+
+        elif cmd == "delete":
+            if len(parts) < 2:
+                print("[Agent] Usage: delete <filename>")
+                continue
+            filename = parts[1]
+            print(f"[Agent] Checking with gateway...")
+            output = delete_file(filename)
+            print(output)
+
+        else:
+            print(f"[Agent] Unknown command: {cmd!r}. Type 'help' for commands.")
+
+
+if __name__ == "__main__":
+    run()
+```
+
+---
+
+### [agent/sandbox/config.txt](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/sandbox/config.txt)
+```text
+this file has configuration info
+```
+
+---
+
+### [firewall/app.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/app.py)
 ```python
 """
 Mini-AEGIS Gateway — Process B
@@ -541,7 +706,130 @@ if __name__ == "__main__":
 
 ---
 
-### [gateway/templates/index.html](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/gateway/templates/index.html)
+### [firewall/guard.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/guard.py)
+```python
+"""
+Mini-AEGIS Guard — the require_approval() function.
+
+Every tool calls this before touching the filesystem.
+It either returns immediately (allow/block) or enters a polling loop
+waiting for a human decision (pending).
+"""
+
+import time
+import requests
+
+GATEWAY_URL = "http://localhost:9000"
+POLL_INTERVAL = 10       # seconds between polls
+POLL_TIMEOUT  = 120     # seconds before we give up and block
+
+
+class Allowed:
+    pass
+
+class Blocked:
+    def __init__(self, reason: str):
+        self.reason = reason
+
+
+def require_approval(tool_name: str, arguments: dict) -> Allowed | Blocked:
+    """
+    Ask the Gateway whether this tool call is permitted.
+
+    Returns Allowed() if the call may proceed, Blocked(reason) otherwise.
+    Blocks the current thread if the Gateway returns 'pending', polling
+    every POLL_INTERVAL seconds until a human decides or POLL_TIMEOUT elapses.
+    """
+    try:
+        resp = requests.post(
+            f"{GATEWAY_URL}/check",
+            json={"tool": tool_name, "arguments": arguments},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        return Blocked(f"Gateway unreachable: {exc}")
+
+    decision = data.get("decision")
+
+    if decision == "allow":
+        return Allowed()
+
+    if decision == "block":
+        return Blocked(data.get("reason", "blocked by gateway"))
+
+    if decision == "pending":
+        check_id = data["check_id"]
+        print(f"[Agent] PENDING — check_id={check_id}. Waiting for human decision "
+              f"(POST http://localhost:9000/decide/{check_id}) ...")
+
+        deadline = time.time() + POLL_TIMEOUT
+        while time.time() < deadline:
+            time.sleep(POLL_INTERVAL)
+            try:
+                poll = requests.get(
+                    f"{GATEWAY_URL}/check/{check_id}",
+                    timeout=10,
+                )
+                poll.raise_for_status()
+                pdata = poll.json()
+            except Exception as exc:
+                return Blocked(f"Gateway unreachable during poll: {exc}")
+
+            pdecision = pdata.get("decision")
+            if pdecision == "allow":
+                return Allowed()
+            if pdecision == "block":
+                return Blocked(pdata.get("reason", "denied by reviewer"))
+            # still "pending" → keep looping
+
+        return Blocked(f"approval timed out after {POLL_TIMEOUT}s")
+
+    return Blocked(f"unexpected gateway decision: {decision!r}")
+```
+
+---
+
+### [firewall/secureflow_guard.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/secureflow_guard.py)
+```python
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to resolve imports correctly
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from firewall.guard import require_approval, Allowed, Blocked
+
+def secureflow_guard(tool_name: str, arguments: dict):
+    """
+    Wrapper for secureflow / mini-aegis guard.
+    Raises PermissionError if the action is blocked by the gateway.
+    """
+    result = require_approval(tool_name, arguments)
+    if isinstance(result, Blocked):
+        raise PermissionError(result.reason)
+```
+
+---
+
+### [firewall/rules.json](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/rules.json)
+```json
+{
+  "rules": [
+    { "tool": "read_file",   "decision": "allow" },
+    { "tool": "write_file",  "decision": "allow" },
+    { "tool": "delete_file", "decision": "pending" }
+  ],
+  "default_decision": "allow"
+}
+```
+
+---
+
+### [firewall/templates/index.html](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/templates/index.html)
 ```html
 <!DOCTYPE html>
 <html lang="en">
@@ -989,278 +1277,3 @@ socket.on('checks_updated',(checks)=>{
 ```
 
 ---
-
-### [agent/main.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/main.py)
-```python
-"""
-Mini-AEGIS Agent — Process A
-
-A simple REPL that understands these commands:
-
-  read   <filename>
-  write  <filename> <content ...>
-  delete <filename>
-  help
-  quit  (or exit, q)
-
-Run this in one terminal after starting the Gateway in another:
-  python gateway/app.py    ← Terminal 1
-  python agent/main.py     ← Terminal 2
-"""
-
-import sys
-from tools import read_file, write_file, delete_file
-
-HELP = """
-Commands:
-  read   <filename>              — read a file from sandbox/
-  write  <filename> <content>    — write content to sandbox/<filename>
-  delete <filename>              — delete sandbox/<filename>  (requires approval)
-  help                           — show this message
-  quit / exit / q                — exit
-"""
-
-def run():
-    print("Mini-AEGIS Agent ready. Type 'help' for commands.")
-    while True:
-        try:
-            line = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n[Agent] Bye.")
-            sys.exit(0)
-
-        if not line:
-            continue
-
-        parts = line.split(maxsplit=2)
-        cmd = parts[0].lower()
-
-        if cmd in ("quit", "exit", "q"):
-            print("[Agent] Bye.")
-            sys.exit(0)
-
-        elif cmd == "help":
-            print(HELP)
-
-        elif cmd == "read":
-            if len(parts) < 2:
-                print("[Agent] Usage: read <filename>")
-                continue
-            filename = parts[1]
-            print(f"[Agent] Checking with gateway...")
-            output = read_file(filename)
-            print(output)
-
-        elif cmd == "write":
-            if len(parts) < 3:
-                print("[Agent] Usage: write <filename> <content>")
-                continue
-            filename = parts[1]
-            content = parts[2]
-            print(f"[Agent] Checking with gateway...")
-            output = write_file(filename, content)
-            print(output)
-
-        elif cmd == "delete":
-            if len(parts) < 2:
-                print("[Agent] Usage: delete <filename>")
-                continue
-            filename = parts[1]
-            print(f"[Agent] Checking with gateway...")
-            output = delete_file(filename)
-            print(output)
-
-        else:
-            print(f"[Agent] Unknown command: {cmd!r}. Type 'help' for commands.")
-
-
-if __name__ == "__main__":
-    run()
-```
-
----
-
-### [agent/guard.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/guard.py)
-```python
-"""
-Mini-AEGIS Guard — the require_approval() function.
-
-Every tool calls this before touching the filesystem.
-It either returns immediately (allow/block) or enters a polling loop
-waiting for a human decision (pending).
-"""
-
-import time
-import requests
-
-GATEWAY_URL = "http://localhost:9000"
-POLL_INTERVAL = 2       # seconds between polls
-POLL_TIMEOUT  = 120     # seconds before we give up and block
-
-
-class Allowed:
-    pass
-
-class Blocked:
-    def __init__(self, reason: str):
-        self.reason = reason
-
-
-def require_approval(tool_name: str, arguments: dict) -> Allowed | Blocked:
-    """
-    Ask the Gateway whether this tool call is permitted.
-
-    Returns Allowed() if the call may proceed, Blocked(reason) otherwise.
-    Blocks the current thread if the Gateway returns 'pending', polling
-    every POLL_INTERVAL seconds until a human decides or POLL_TIMEOUT elapses.
-    """
-    try:
-        resp = requests.post(
-            f"{GATEWAY_URL}/check",
-            json={"tool": tool_name, "arguments": arguments},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        return Blocked(f"Gateway unreachable: {exc}")
-
-    decision = data.get("decision")
-
-    if decision == "allow":
-        return Allowed()
-
-    if decision == "block":
-        return Blocked(data.get("reason", "blocked by gateway"))
-
-    if decision == "pending":
-        check_id = data["check_id"]
-        print(f"[Agent] PENDING — check_id={check_id}. Waiting for human decision "
-              f"(POST http://localhost:9000/decide/{check_id}) ...")
-
-        deadline = time.time() + POLL_TIMEOUT
-        while time.time() < deadline:
-            time.sleep(POLL_INTERVAL)
-            try:
-                poll = requests.get(
-                    f"{GATEWAY_URL}/check/{check_id}",
-                    timeout=10,
-                )
-                poll.raise_for_status()
-                pdata = poll.json()
-            except Exception as exc:
-                return Blocked(f"Gateway unreachable during poll: {exc}")
-
-            pdecision = pdata.get("decision")
-            if pdecision == "allow":
-                return Allowed()
-            if pdecision == "block":
-                return Blocked(pdata.get("reason", "denied by reviewer"))
-            # still "pending" → keep looping
-
-        return Blocked(f"approval timed out after {POLL_TIMEOUT}s")
-
-    return Blocked(f"unexpected gateway decision: {decision!r}")
-```
-
----
-
-### [agent/tools.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/tools.py)
-```python
-"""
-Mini-AEGIS Agent tools.
-
-Each tool:
-  1. Calls guard.require_approval() first — always.
-  2. Only touches the filesystem if the result is Allowed.
-  3. All filesystem access is confined to the sandbox/ directory.
-"""
-
-from pathlib import Path
-from guard import require_approval, Allowed
-
-# All tools are sandboxed to this directory. Attempts to escape via '../' etc.
-# are rejected.
-SANDBOX = Path(__file__).parent.parent / "sandbox"
-SANDBOX.mkdir(exist_ok=True)
-
-
-def _resolve_safe(filename: str) -> Path | None:
-    """Return an absolute path inside SANDBOX, or None if the filename escapes."""
-    target = (SANDBOX / filename).resolve()
-    try:
-        target.relative_to(SANDBOX.resolve())
-        return target
-    except ValueError:
-        return None
-
-
-def read_file(filename: str) -> str:
-    result = require_approval("read_file", {"filename": filename})
-    if not isinstance(result, Allowed):
-        return f"[BLOCKED] {result.reason}"
-
-    path = _resolve_safe(filename)
-    if path is None:
-        return "[ERROR] Path escapes sandbox."
-    if not path.exists():
-        return f"[ERROR] File not found: {filename}"
-
-    content = path.read_text()
-    print(f"[Agent] read_file OK: {filename} ({len(content)} bytes)")
-    return content
-
-
-def write_file(filename: str, content: str) -> str:
-    result = require_approval("write_file", {"filename": filename})
-    if not isinstance(result, Allowed):
-        return f"[BLOCKED] {result.reason}"
-
-    path = _resolve_safe(filename)
-    if path is None:
-        return "[ERROR] Path escapes sandbox."
-
-    path.write_text(content)
-    print(f"[Agent] write_file OK: {filename} ({len(content)} bytes written)")
-    return f"Written {len(content)} bytes to {filename}."
-
-
-def delete_file(filename: str) -> str:
-    result = require_approval("delete_file", {"filename": filename})
-    if not isinstance(result, Allowed):
-        return f"[BLOCKED] {result.reason}"
-
-    path = _resolve_safe(filename)
-    if path is None:
-        return "[ERROR] Path escapes sandbox."
-    if not path.exists():
-        return f"[ERROR] File not found: {filename}"
-
-    path.unlink()
-    print(f"[Agent] delete_file OK: {filename} deleted.")
-    return f"Deleted {filename}."
-```
-
----
-
-### [agent/secureflow_guard.py](file:///c:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/secureflow_guard.py)
-```python
-import sys
-from pathlib import Path
-
-# Add agent directory to sys.path to resolve imports correctly
-agent_dir = Path(__file__).parent
-if str(agent_dir) not in sys.path:
-    sys.path.append(str(agent_dir))
-
-from guard import require_approval, Allowed, Blocked
-
-def secureflow_guard(tool_name: str, arguments: dict):
-    """
-    Wrapper for secureflow / mini-aegis guard.
-    Raises PermissionError if the action is blocked by the gateway.
-    """
-    result = require_approval(tool_name, arguments)
-    if isinstance(result, Blocked):
-        raise PermissionError(result.reason)
-```
