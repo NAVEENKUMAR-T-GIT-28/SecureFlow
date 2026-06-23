@@ -1,6 +1,6 @@
 from pathlib import Path
 
-SANDBOX = Path(__file__).parent / "sandbox"
+SANDBOX = Path(__file__).parent.parent / "sandbox"
 SANDBOX.mkdir(exist_ok=True)
 
 # Each function name must match the "name" field in tools.json exactly

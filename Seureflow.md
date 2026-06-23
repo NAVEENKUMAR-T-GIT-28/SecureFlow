@@ -10,20 +10,23 @@ This document contains the complete folder structure and full source code of the
 naveen-agent-gaurd/
 ├── .gitignore
 ├── README.md
-├── agent/
-│   ├── ollama_agent.py
-│   ├── tools.json
-│   ├── tool_registry.py
-│   └── sandbox/
-│       ├── cli.py
-│       └── config.txt
-├── firewall/
-│   ├── app.py
-│   ├── guard.py
-│   ├── secureflow_guard.py
-│   ├── rules.json
-│   └── templates/
-│       └── index.html
+├── update_docs.py
+├── migrate.py
+├── secureflow/
+│   ├── sandbox/
+│   │   ├── cli.py
+│   │   └── config.txt
+│   ├── agent/
+│   │   ├── ollama_agent.py
+│   │   ├── tools.json
+│   │   └── tool_registry.py
+│   └── firewall/
+│       ├── app.py
+│       ├── guard.py
+│       ├── secureflow_guard.py
+│       ├── rules.json
+│       └── templates/
+│           └── index.html
 └── docs/
     ├── api.md
     ├── architecture.md
@@ -193,18 +196,29 @@ Edit `gateway/rules.json` and restart the Gateway.
 ## File layout
 
 ```
-mini-aegis/
-├── gateway/
-│   ├── app.py        # Flask server — /check, /check/{id}, /decide/{id}, /log
-│   └── rules.json    # One rule per tool: allow | block | pending
+Agent-gaurd/
+├── secureflow/
+│   ├── sandbox/              # The only folder tools are allowed to touch
+│   │   ├── cli.py
+│   │   └── config.txt
+│   ├── agent/
+│   │   ├── ollama_agent.py   # Conversational LLM chat loop
+│   │   ├── tool_registry.py  # Executes tools
+│   │   └── tools.json        # Tool schemas loaded by the LLM
+│   └── firewall/
+│       ├── app.py            # Flask server — /check, /check/{id}, /decide/{id}, /log
+│       ├── rules.json        # One rule per tool: allow | block | pending
+│       └── secureflow_guard.py # Interceptor client that polls for approval
 │
-├── agent/
-│   ├── main.py       # CLI loop
-│   ├── guard.py      # require_approval() — the polling client
-│   └── tools.py      # read_file / write_file / delete_file
+├── docs/
+│   ├── architecture.md
+│   ├── api.md
+│   └── security-model.md
 │
-├── sandbox/          # The only folder tools are allowed to touch
-└── README.md
+├── README.md
+├── update_docs.py
+├── migrate.py
+└── .gitignore
 ```
 
 ---
@@ -229,7 +243,7 @@ retry queues, HTTPS, and anything else that belongs in a production tool.
 
 ---
 
-### [agent/ollama_agent.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/ollama_agent.py)
+### [secureflow/agent/ollama_agent.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/agent/ollama_agent.py)
 ```python
 import ollama
 import json
@@ -344,7 +358,7 @@ if __name__ == "__main__":
 
 ---
 
-### [agent/tools.json](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/tools.json)
+### [secureflow/agent/tools.json](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/agent/tools.json)
 ```json
 {
   "tools": [
@@ -385,7 +399,7 @@ if __name__ == "__main__":
 
 ---
 
-### [agent/tool_registry.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/tool_registry.py)
+### [secureflow/agent/tool_registry.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/agent/tool_registry.py)
 ```python
 from pathlib import Path
 
@@ -432,7 +446,7 @@ def execute(name: str, args: dict) -> str:
 
 ---
 
-### [agent/sandbox/cli.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/sandbox/cli.py)
+### [secureflow/sandbox/cli.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/sandbox/cli.py)
 ```python
 """
 Mini-AEGIS Agent — Process A
@@ -522,14 +536,14 @@ if __name__ == "__main__":
 
 ---
 
-### [agent/sandbox/config.txt](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/agent/sandbox/config.txt)
+### [secureflow/sandbox/config.txt](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/sandbox/config.txt)
 ```text
 this file has configuration info
 ```
 
 ---
 
-### [firewall/app.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/app.py)
+### [secureflow/firewall/app.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/firewall/app.py)
 ```python
 """
 Mini-AEGIS Gateway — Process B
@@ -706,7 +720,7 @@ if __name__ == "__main__":
 
 ---
 
-### [firewall/guard.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/guard.py)
+### [secureflow/firewall/guard.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/firewall/guard.py)
 ```python
 """
 Mini-AEGIS Guard — the require_approval() function.
@@ -791,7 +805,7 @@ def require_approval(tool_name: str, arguments: dict) -> Allowed | Blocked:
 
 ---
 
-### [firewall/secureflow_guard.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/secureflow_guard.py)
+### [secureflow/firewall/secureflow_guard.py](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/firewall/secureflow_guard.py)
 ```python
 import sys
 from pathlib import Path
@@ -815,7 +829,7 @@ def secureflow_guard(tool_name: str, arguments: dict):
 
 ---
 
-### [firewall/rules.json](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/rules.json)
+### [secureflow/firewall/rules.json](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/firewall/rules.json)
 ```json
 {
   "rules": [
@@ -829,7 +843,7 @@ def secureflow_guard(tool_name: str, arguments: dict):
 
 ---
 
-### [firewall/templates/index.html](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/firewall/templates/index.html)
+### [secureflow/firewall/templates/index.html](file:///C:/Users/navee/Downloads/mini-aegis/naveen-agent-gaurd/secureflow/firewall/templates/index.html)
 ```html
 <!DOCTYPE html>
 <html lang="en">

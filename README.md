@@ -103,18 +103,28 @@ Edit `gateway/rules.json` and restart the Gateway.
 
 ```
 Agent-gaurd/
-├── firewall/
-│   ├── app.py                # Flask server — /check, /check/{id}, /decide/{id}, /log
-│   ├── rules.json            # One rule per tool: allow | block | pending
-│   └── secureflow_guard.py   # Interceptor client that polls for approval
+├── secureflow/
+│   ├── sandbox/              # The only folder tools are allowed to touch
+│   │   ├── cli.py
+│   │   └── config.txt
+│   ├── agent/
+│   │   ├── ollama_agent.py   # Conversational LLM chat loop
+│   │   ├── tool_registry.py  # Executes tools
+│   │   └── tools.json        # Tool schemas loaded by the LLM
+│   └── firewall/
+│       ├── app.py            # Flask server — /check, /check/{id}, /decide/{id}, /log
+│       ├── rules.json        # One rule per tool: allow | block | pending
+│       └── secureflow_guard.py # Interceptor client that polls for approval
 │
-├── agent/
-│   ├── ollama_agent.py       # Conversational LLM chat loop
-│   ├── tool_registry.py      # Executes tools
-│   ├── tools.json            # Tool schemas loaded by the LLM
-│   └── sandbox/              # The only folder tools are allowed to touch
+├── docs/
+│   ├── architecture.md
+│   ├── api.md
+│   └── security-model.md
 │
-└── README.md
+├── README.md
+├── update_docs.py
+├── migrate.py
+└── .gitignore
 ```
 
 ---

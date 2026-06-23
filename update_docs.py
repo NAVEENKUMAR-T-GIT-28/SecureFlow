@@ -5,36 +5,39 @@ from pathlib import Path
 FILES = [
     ".gitignore",
     "README.md",
-    "agent/ollama_agent.py",
-    "agent/tools.json",
-    "agent/tool_registry.py",
-    "agent/sandbox/cli.py",
-    "agent/sandbox/config.txt",
-    "firewall/app.py",
-    "firewall/guard.py",
-    "firewall/secureflow_guard.py",
-    "firewall/rules.json",
-    "firewall/templates/index.html",
+    "secureflow/agent/ollama_agent.py",
+    "secureflow/agent/tools.json",
+    "secureflow/agent/tool_registry.py",
+    "secureflow/sandbox/cli.py",
+    "secureflow/sandbox/config.txt",
+    "secureflow/firewall/app.py",
+    "secureflow/firewall/guard.py",
+    "secureflow/firewall/secureflow_guard.py",
+    "secureflow/firewall/rules.json",
+    "secureflow/firewall/templates/index.html",
 ]
 
 def generate_tree():
     return """naveen-agent-gaurd/
 ├── .gitignore
 ├── README.md
-├── agent/
-│   ├── ollama_agent.py
-│   ├── tools.json
-│   ├── tool_registry.py
-│   └── sandbox/
-│       ├── cli.py
-│       └── config.txt
-├── firewall/
-│   ├── app.py
-│   ├── guard.py
-│   ├── secureflow_guard.py
-│   ├── rules.json
-│   └── templates/
-│       └── index.html
+├── update_docs.py
+├── migrate.py
+├── secureflow/
+│   ├── sandbox/
+│   │   ├── cli.py
+│   │   └── config.txt
+│   ├── agent/
+│   │   ├── ollama_agent.py
+│   │   ├── tools.json
+│   │   └── tool_registry.py
+│   └── firewall/
+│       ├── app.py
+│       ├── guard.py
+│       ├── secureflow_guard.py
+│       ├── rules.json
+│       └── templates/
+│           └── index.html
 └── docs/
     ├── api.md
     ├── architecture.md
